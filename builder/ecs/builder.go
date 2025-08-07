@@ -188,6 +188,9 @@ func (b *Builder) Run(ctx context.Context, ui packersdk.Ui, hook packersdk.Hook)
 		&commonsteps.StepCleanupTempKeys{
 			Comm: &b.config.RunConfig.Comm,
 		},
+		&stepImageDeleteSSHPrivateKey{
+			AlicloudImageDeleteSSHPrivateKey: b.config.AlicloudImageDeleteSSHPrivateKey,
+		},
 		&stepStopAlicloudInstance{
 			ForceStop:   b.config.ForceStopInstance,
 			DisableStop: b.config.DisableStopInstance,

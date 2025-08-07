@@ -5,3 +5,4 @@ packer-plugin-alicloud
 .idea
 
 crash.log
+vendor/

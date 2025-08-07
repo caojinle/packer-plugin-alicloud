@@ -315,6 +315,8 @@ builder.
 
 - `kms_key_id` (string) - The source image KMS key ID used to encrypt the disk.
 
+- `image_delete_ssh_private_key` (bool) - If set to true, the ECS keypair information will be removed. The default value is false.
+
 <!-- End of code generated from the comments of the AlicloudImageConfig struct in builder/ecs/image_config.go; -->
 
 
