@@ -168,10 +168,6 @@ type AlicloudImageConfig struct {
 	AlicloudTargetImageFamily string `mapstructure:"target_image_family" required:"false"`
 	// The boot mode of the user-defined image, it should to be one of 'BIOS', 'UEFI' or 'UEFI-Preferred'.
 	AlicloudBootMode string `mapstructure:"boot_mode" required:"false"`
-	// Copy to the destination KMS key ID array
-	AlicloudKMSKeyCopyIds []string `mapstructure:"kms_key_copy_ids" required:"false"`
-	// The source image KMS key ID used to encrypt the disk.
-	AlicloudKMSKeyId string `mapstructure:"kms_key_id" required:"false"`
 	// If set to true, the ECS keypair information will be removed. The default value is false.
 	AlicloudImageDeleteSSHPrivateKey bool `mapstructure:"image_delete_ssh_private_key" required:"false"`
 }

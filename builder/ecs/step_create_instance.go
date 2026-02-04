@@ -50,14 +50,14 @@ func (s *stepCreateAlicloudInstance) Run(ctx context.Context, state multistep.St
 	ui := state.Get("ui").(packersdk.Ui)
 
 	ui.Say("Creating instance...")
-	runInstanceRequest, err := s.buildCreateInstanceRequest(state)
+	createInstanceRequest, err := s.buildCreateInstanceRequest(state)
 	if err != nil {
 		return halt(state, err, "")
 	}
 
-	runInstancesResponse, err := client.WaitForExpected(&WaitForExpectArgs{
+	createInstanceResponse, err := client.WaitForExpected(&WaitForExpectArgs{
 		RequestFunc: func() (responses.AcsResponse, error) {
-			return client.RunInstances(runInstanceRequest)
+			return client.CreateInstance(createInstanceRequest)
 		},
 		EvalFunc: client.EvalCouldRetryResponse(createInstanceRetryErrors, EvalRetryErrorType),
 	})
@@ -66,9 +66,9 @@ func (s *stepCreateAlicloudInstance) Run(ctx context.Context, state multistep.St
 		return halt(state, err, "Error creating instance")
 	}
 
-	instanceId := runInstancesResponse.(*ecs.RunInstancesResponse).InstanceIdSets.InstanceIdSet[0]
+	instanceId := createInstanceResponse.(*ecs.CreateInstanceResponse).InstanceId
 
-	_, err = client.WaitForInstanceStatus(s.RegionId, instanceId, InstanceStatusRunning)
+	_, err = client.WaitForInstanceStatus(s.RegionId, instanceId, InstanceStatusStopped)
 	if err != nil {
 		return halt(state, err, "Error waiting create instance")
 	}
@@ -78,21 +78,6 @@ func (s *stepCreateAlicloudInstance) Run(ctx context.Context, state multistep.St
 	instances, err := client.DescribeInstances(describeInstancesRequest)
 	if err != nil {
 		return halt(state, err, "")
-	}
-	status := instances.Instances.Instance[0].Status
-	if status == InstanceStatusRunning {
-		stopInstanceRequest := ecs.CreateStopInstanceRequest()
-		stopInstanceRequest.InstanceId = instanceId
-		if _, err := client.StopInstance(stopInstanceRequest); err != nil {
-			return halt(state, err, "Error stopping instance")
-		}
-
-		ui.Say(fmt.Sprintf("Stoping instance: %s", instanceId))
-
-		_, err = client.WaitForInstanceStatus(s.RegionId, instanceId, InstanceStatusStopped)
-		if err != nil {
-			return halt(state, err, "Timeout waiting for instance to stop")
-		}
 	}
 
 	ui.Message(fmt.Sprintf("Created instance: %s", instanceId))
@@ -130,8 +115,8 @@ func (s *stepCreateAlicloudInstance) Cleanup(state multistep.StateBag) {
 	}
 }
 
-func (s *stepCreateAlicloudInstance) buildCreateInstanceRequest(state multistep.StateBag) (*ecs.RunInstancesRequest, error) {
-	request := ecs.CreateRunInstancesRequest()
+func (s *stepCreateAlicloudInstance) buildCreateInstanceRequest(state multistep.StateBag) (*ecs.CreateInstanceRequest, error) {
+	request := ecs.CreateCreateInstanceRequest()
 	request.ClientToken = uuid.TimeOrderedUUID()
 	request.RegionId = s.RegionId
 	request.InstanceType = s.InstanceType
@@ -188,19 +173,13 @@ func (s *stepCreateAlicloudInstance) buildCreateInstanceRequest(state multistep.
 	systemDisk := config.AlicloudImageConfig.ECSSystemDiskMapping
 	request.SystemDiskDiskName = systemDisk.DiskName
 	request.SystemDiskCategory = systemDisk.DiskCategory
-	request.SystemDiskSize = strconv.Itoa(systemDisk.DiskSize)
+	request.SystemDiskSize = requests.Integer(convertNumber(systemDisk.DiskSize))
 	request.SystemDiskDescription = systemDisk.Description
 
-	var runInstancesSystemDisk ecs.RunInstancesSystemDisk
-	if systemDisk.Encrypted != confighelper.TriUnset {
-		runInstancesSystemDisk.Encrypted = strconv.FormatBool(systemDisk.Encrypted.True())
-	}
-	request.SystemDisk = runInstancesSystemDisk
-
 	imageDisks := config.AlicloudImageConfig.ECSImagesDiskMappings
-	var dataDisks []ecs.RunInstancesDataDisk
+	var dataDisks []ecs.CreateInstanceDataDisk
 	for _, imageDisk := range imageDisks {
-		var dataDisk ecs.RunInstancesDataDisk
+		var dataDisk ecs.CreateInstanceDataDisk
 		dataDisk.DiskName = imageDisk.DiskName
 		dataDisk.Category = imageDisk.DiskCategory
 		dataDisk.Size = convertNumber(imageDisk.DiskSize)
@@ -239,11 +218,11 @@ func (s *stepCreateAlicloudInstance) getUserData(state multistep.StateBag) (stri
 
 }
 
-func buildCreateInstanceTags(tags map[string]string) *[]ecs.RunInstancesTag {
-	var ecsTags []ecs.RunInstancesTag
+func buildCreateInstanceTags(tags map[string]string) *[]ecs.CreateInstanceTag {
+	var ecsTags []ecs.CreateInstanceTag
 
 	for k, v := range tags {
-		ecsTags = append(ecsTags, ecs.RunInstancesTag{Key: k, Value: v})
+		ecsTags = append(ecsTags, ecs.CreateInstanceTag{Key: k, Value: v})
 	}
 
 	return &ecsTags
