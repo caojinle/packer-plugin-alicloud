@@ -18,7 +18,6 @@ import (
 type stepRegionCopyAlicloudImage struct {
 	AlicloudImageDestinationRegions []string
 	AlicloudImageDestinationNames   []string
-	KmsKeyIds                       []string
 	RegionId                        string
 	WaitCopyingImageReadyTimeout    int
 }
@@ -29,7 +28,6 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 	if config.ImageEncrypted != confighelper.TriUnset {
 		s.AlicloudImageDestinationRegions = append(s.AlicloudImageDestinationRegions, s.RegionId)
 		s.AlicloudImageDestinationNames = append(s.AlicloudImageDestinationNames, config.AlicloudImageName)
-		s.KmsKeyIds = append(s.KmsKeyIds, config.AlicloudKMSKeyId)
 	}
 
 	if len(s.AlicloudImageDestinationRegions) == 0 {
@@ -50,10 +48,8 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 		}
 
 		ecsImageName := ""
-		kmsKeyId := ""
 		if numberOfName > 0 && index < numberOfName {
 			ecsImageName = s.AlicloudImageDestinationNames[index]
-			kmsKeyId = s.KmsKeyIds[index]
 		}
 
 		copyImageRequest := ecs.CreateCopyImageRequest()
@@ -63,7 +59,6 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 		copyImageRequest.DestinationImageName = ecsImageName
 		copyImageRequest.ResourceGroupId = config.AlicloudResourceGroupId
 		if config.ImageEncrypted != confighelper.TriUnset {
-			copyImageRequest.KMSKeyId = kmsKeyId
 			copyImageRequest.Encrypted = requests.NewBoolean(config.ImageEncrypted.True())
 		}
 
