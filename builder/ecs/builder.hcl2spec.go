@@ -19,6 +19,7 @@ type FlatAlicloudDiskDevice struct {
 	DeleteWithInstance *bool   `mapstructure:"disk_delete_with_instance" required:"false" cty:"disk_delete_with_instance" hcl:"disk_delete_with_instance"`
 	Device             *string `mapstructure:"disk_device" required:"false" cty:"disk_device" hcl:"disk_device"`
 	Encrypted          *bool   `mapstructure:"disk_encrypted" required:"false" cty:"disk_encrypted" hcl:"disk_encrypted"`
+	KMSKeyId           *string `mapstructure:"disk_kms_key_id" required:"false" cty:"disk_kms_key_id" hcl:"disk_kms_key_id"`
 }
 
 // FlatMapstructure returns a new FlatAlicloudDiskDevice.
@@ -41,6 +42,7 @@ func (*FlatAlicloudDiskDevice) HCL2Spec() map[string]hcldec.Spec {
 		"disk_delete_with_instance": &hcldec.AttrSpec{Name: "disk_delete_with_instance", Type: cty.Bool, Required: false},
 		"disk_device":               &hcldec.AttrSpec{Name: "disk_device", Type: cty.String, Required: false},
 		"disk_encrypted":            &hcldec.AttrSpec{Name: "disk_encrypted", Type: cty.Bool, Required: false},
+		"disk_kms_key_id":           &hcldec.AttrSpec{Name: "disk_kms_key_id", Type: cty.String, Required: false},
 	}
 	return s
 }

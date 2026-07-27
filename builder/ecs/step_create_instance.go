@@ -49,15 +49,15 @@ func (s *stepCreateAlicloudInstance) Run(ctx context.Context, state multistep.St
 	client := state.Get("client").(*ClientWrapper)
 	ui := state.Get("ui").(packersdk.Ui)
 
-	ui.Say("Creating instance...")
-	createInstanceRequest, err := s.buildCreateInstanceRequest(state)
+	ui.Say("[run] Creating instance...")
+	runInstancesRequest, err := s.buildRunInstancesRequest(state)
 	if err != nil {
 		return halt(state, err, "")
 	}
 
-	createInstanceResponse, err := client.WaitForExpected(&WaitForExpectArgs{
+	runInstancesResponse, err := client.WaitForExpected(&WaitForExpectArgs{
 		RequestFunc: func() (responses.AcsResponse, error) {
-			return client.CreateInstance(createInstanceRequest)
+			return client.RunInstances(runInstancesRequest)
 		},
 		EvalFunc: client.EvalCouldRetryResponse(createInstanceRetryErrors, EvalRetryErrorType),
 	})
@@ -66,21 +66,19 @@ func (s *stepCreateAlicloudInstance) Run(ctx context.Context, state multistep.St
 		return halt(state, err, "Error creating instance")
 	}
 
-	instanceId := createInstanceResponse.(*ecs.CreateInstanceResponse).InstanceId
+	instanceIdSet := runInstancesResponse.(*ecs.RunInstancesResponse).InstanceIdSets.InstanceIdSet
+	if len(instanceIdSet) == 0 {
+		return halt(state, fmt.Errorf("no instance id returned by RunInstances"), "Error creating instance")
+	}
+	instanceId := instanceIdSet[0]
 
-	_, err = client.WaitForInstanceStatus(s.RegionId, instanceId, InstanceStatusStopped)
+	waitResponse, err := client.WaitForInstanceStatus(s.RegionId, instanceId, InstanceStatusRunning)
 	if err != nil {
 		return halt(state, err, "Error waiting create instance")
 	}
+	instances := waitResponse.(*ecs.DescribeInstancesResponse)
 
-	describeInstancesRequest := ecs.CreateDescribeInstancesRequest()
-	describeInstancesRequest.InstanceIds = fmt.Sprintf("[\"%s\"]", instanceId)
-	instances, err := client.DescribeInstances(describeInstancesRequest)
-	if err != nil {
-		return halt(state, err, "")
-	}
-
-	ui.Message(fmt.Sprintf("Created instance: %s", instanceId))
+	ui.Message(fmt.Sprintf("[run] created instance: %s", instanceId))
 	s.instance = &instances.Instances.Instance[0]
 	state.Put("instance", s.instance)
 	// instance_id is the generic term used so that users can have access to the
@@ -115,14 +113,16 @@ func (s *stepCreateAlicloudInstance) Cleanup(state multistep.StateBag) {
 	}
 }
 
-func (s *stepCreateAlicloudInstance) buildCreateInstanceRequest(state multistep.StateBag) (*ecs.CreateInstanceRequest, error) {
-	request := ecs.CreateCreateInstanceRequest()
+func (s *stepCreateAlicloudInstance) buildRunInstancesRequest(state multistep.StateBag) (*ecs.RunInstancesRequest, error) {
+	request := ecs.CreateRunInstancesRequest()
 	request.ClientToken = uuid.TimeOrderedUUID()
 	request.RegionId = s.RegionId
 	request.InstanceType = s.InstanceType
 	request.InstanceName = s.InstanceName
 	request.RamRoleName = s.RamRoleName
-	request.Tag = buildCreateInstanceTags(s.Tags)
+	request.Amount = requests.NewInteger(1)
+	request.MinAmount = requests.NewInteger(1)
+	request.Tag = buildRunInstancesTags(s.Tags)
 	request.ZoneId = s.ZoneId
 	request.SecurityEnhancementStrategy = s.SecurityEnhancementStrategy
 	if s.AlicloudImageFamily != "" {
@@ -138,13 +138,6 @@ func (s *stepCreateAlicloudInstance) buildCreateInstanceRequest(state multistep.
 	if networkType == InstanceNetworkVpc {
 		vswitchId := state.Get("vswitchid").(string)
 		request.VSwitchId = vswitchId
-
-		userData, err := s.getUserData(state)
-		if err != nil {
-			return nil, err
-		}
-
-		request.UserData = userData
 	} else {
 		if s.InternetChargeType == "" {
 			s.InternetChargeType = "PayByTraffic"
@@ -163,23 +156,49 @@ func (s *stepCreateAlicloudInstance) buildCreateInstanceRequest(state multistep.
 		request.IoOptimized = IOOptimizedNone
 	}
 
+	userData, err := s.getUserData(state)
+	if err != nil {
+		return nil, err
+	}
+	request.UserData = userData
+
 	config := state.Get("config").(*Config)
 	password := config.Comm.SSHPassword
 	if password == "" && config.Comm.WinRMPassword != "" {
 		password = config.Comm.WinRMPassword
 	}
-	request.Password = password
+	keyPairName := config.Comm.SSHKeyPairName
+	if keyPairName == "" {
+		keyPairName = config.Comm.SSHTemporaryKeyPairName
+	}
+	if password != "" && keyPairName != "" {
+		return nil, fmt.Errorf("password and key_pair_name are mutually exclusive")
+	}
+	if keyPairName != "" {
+		request.KeyPairName = keyPairName
+	} else {
+		request.Password = password
+	}
 
 	systemDisk := config.AlicloudImageConfig.ECSSystemDiskMapping
 	request.SystemDiskDiskName = systemDisk.DiskName
 	request.SystemDiskCategory = systemDisk.DiskCategory
-	request.SystemDiskSize = requests.Integer(convertNumber(systemDisk.DiskSize))
+	request.SystemDiskSize = convertNumber(systemDisk.DiskSize)
 	request.SystemDiskDescription = systemDisk.Description
 
+	var runInstancesSystemDisk ecs.RunInstancesSystemDisk
+	if systemDisk.Encrypted != confighelper.TriUnset {
+		runInstancesSystemDisk.Encrypted = strconv.FormatBool(systemDisk.Encrypted.True())
+	}
+	if systemDisk.KMSKeyId != "" {
+		runInstancesSystemDisk.KMSKeyId = systemDisk.KMSKeyId
+	}
+	request.SystemDisk = runInstancesSystemDisk
+
 	imageDisks := config.AlicloudImageConfig.ECSImagesDiskMappings
-	var dataDisks []ecs.CreateInstanceDataDisk
+	var dataDisks []ecs.RunInstancesDataDisk
 	for _, imageDisk := range imageDisks {
-		var dataDisk ecs.CreateInstanceDataDisk
+		var dataDisk ecs.RunInstancesDataDisk
 		dataDisk.DiskName = imageDisk.DiskName
 		dataDisk.Category = imageDisk.DiskCategory
 		dataDisk.Size = convertNumber(imageDisk.DiskSize)
@@ -208,21 +227,17 @@ func (s *stepCreateAlicloudInstance) getUserData(state multistep.StateBag) (stri
 		}
 
 		userData = string(data)
-	}
-
-	if userData != "" {
 		userData = base64.StdEncoding.EncodeToString([]byte(userData))
 	}
-
 	return userData, nil
 
 }
 
-func buildCreateInstanceTags(tags map[string]string) *[]ecs.CreateInstanceTag {
-	var ecsTags []ecs.CreateInstanceTag
+func buildRunInstancesTags(tags map[string]string) *[]ecs.RunInstancesTag {
+	var ecsTags []ecs.RunInstancesTag
 
 	for k, v := range tags {
-		ecsTags = append(ecsTags, ecs.CreateInstanceTag{Key: k, Value: v})
+		ecsTags = append(ecsTags, ecs.RunInstancesTag{Key: k, Value: v})
 	}
 
 	return &ecsTags

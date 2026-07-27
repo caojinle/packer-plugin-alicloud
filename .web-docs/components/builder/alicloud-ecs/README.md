@@ -476,6 +476,10 @@ The following policy document provides the minimal set permissions necessary for
   it was in the source image. Please refer to Introduction of ECS disk
   encryption for more details.
 
+- `disk_kms_key_id` (string) - The KMS key ID used to encrypt the disk. If this option is set, the
+  disk will be encrypted automatically even if `disk_encrypted` is not
+  explicitly set to true.
+
 <!-- End of code generated from the comments of the AlicloudDiskDevice struct in builder/ecs/image_config.go; -->
 
 

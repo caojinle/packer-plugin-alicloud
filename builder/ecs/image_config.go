@@ -57,6 +57,10 @@ type AlicloudDiskDevice struct {
 	// it was in the source image. Please refer to Introduction of ECS disk
 	// encryption for more details.
 	Encrypted config.Trilean `mapstructure:"disk_encrypted" required:"false"`
+	// The KMS key ID used to encrypt the disk. If this option is set, the
+	// disk will be encrypted automatically even if `disk_encrypted` is not
+	// explicitly set to true.
+	KMSKeyId string `mapstructure:"disk_kms_key_id" required:"false"`
 }
 
 // The "AlicloudDiskDevices" object is used to define disk mappings for your
@@ -221,6 +225,11 @@ func (c *AlicloudImageConfig) Prepare(ctx *interpolate.Context) []error {
 		}
 
 		c.AlicloudImageDestinationRegions = regions
+	}
+
+	// If a KMS key ID is provided for the system disk, encryption must be enabled.
+	if c.ECSSystemDiskMapping.KMSKeyId != "" {
+		c.ECSSystemDiskMapping.Encrypted = config.TrileanFromBool(true)
 	}
 
 	return errs
