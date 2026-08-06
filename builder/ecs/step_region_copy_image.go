@@ -42,25 +42,17 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 	numberOfName := len(s.AlicloudImageDestinationNames)
 
 	ui.Say(fmt.Sprintf("Coping image %s from %s...", srcImageId, s.RegionId))
+	crossRegionIndex := -1
 	for index, destinationRegion := range s.AlicloudImageDestinationRegions {
-		if destinationRegion == s.RegionId && config.ImageEncrypted == confighelper.TriUnset {
+		if destinationRegion == s.RegionId && !config.ImageEncrypted.True() {
 			continue
 		}
 
-		ecsImageName := ""
-		if numberOfName > 0 && index < numberOfName {
-			ecsImageName = s.AlicloudImageDestinationNames[index]
+		if destinationRegion != s.RegionId {
+			crossRegionIndex++
 		}
 
-		copyImageRequest := ecs.CreateCopyImageRequest()
-		copyImageRequest.RegionId = s.RegionId
-		copyImageRequest.ImageId = srcImageId
-		copyImageRequest.DestinationRegionId = destinationRegion
-		copyImageRequest.DestinationImageName = ecsImageName
-		copyImageRequest.ResourceGroupId = config.AlicloudResourceGroupId
-		if config.ImageEncrypted != confighelper.TriUnset {
-			copyImageRequest.Encrypted = requests.NewBoolean(config.ImageEncrypted.True())
-		}
+		copyImageRequest := s.buildCopyImageRequest(index, destinationRegion, config, srcImageId, numberOfName, crossRegionIndex)
 
 		imageResponse, err := client.CopyImage(copyImageRequest)
 		if err != nil {
@@ -78,6 +70,34 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 	}
 
 	return multistep.ActionContinue
+}
+
+func (s *stepRegionCopyAlicloudImage) buildCopyImageRequest(index int, destinationRegion string, config *Config, srcImageId string, numberOfName int, crossRegionIndex int) *ecs.CopyImageRequest {
+	ecsImageName := config.AlicloudImageName
+	if numberOfName > 0 && index < numberOfName {
+		ecsImageName = s.AlicloudImageDestinationNames[index]
+	}
+
+	copyImageRequest := ecs.CreateCopyImageRequest()
+	copyImageRequest.RegionId = s.RegionId
+	copyImageRequest.ImageId = srcImageId
+	copyImageRequest.DestinationRegionId = destinationRegion
+	copyImageRequest.DestinationImageName = ecsImageName
+	copyImageRequest.ResourceGroupId = config.AlicloudResourceGroupId
+	if config.ImageEncrypted.True() {
+		copyImageRequest.Encrypted = requests.NewBoolean(true)
+		if destinationRegion == s.RegionId {
+			if config.KMSKeyId != "" {
+				copyImageRequest.KMSKeyId = config.KMSKeyId
+			}
+		} else {
+			if crossRegionIndex < len(config.ImageCopyKMSKeyIds) && config.ImageCopyKMSKeyIds[crossRegionIndex] != "" {
+				copyImageRequest.KMSKeyId = config.ImageCopyKMSKeyIds[crossRegionIndex]
+			}
+		}
+	}
+
+	return copyImageRequest
 }
 
 func (s *stepRegionCopyAlicloudImage) Cleanup(state multistep.StateBag) {

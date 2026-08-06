@@ -42,5 +42,5 @@ jobs:
       - run: |
           echo "Testing with Go ${{ needs.get-go-version.outputs.go-version }}"
           go test -race -count 1 ./... -timeout=3m
-
-
+        env:
+          GOFLAGS: "-ldflags=-linkmode=external"
