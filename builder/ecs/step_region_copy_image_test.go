@@ -10,13 +10,16 @@ import (
 )
 
 func TestStepRegionCopyAlicloudImage_buildCopyImageRequest_sameRegionKMSKeyId(t *testing.T) {
-	step := &stepRegionCopyAlicloudImage{RegionId: "cn-hangzhou"}
+	step := &stepRegionCopyAlicloudImage{
+		RegionId:                      "cn-hangzhou",
+		AlicloudImageDestinationNames: []string{"test-image"},
+	}
 	cfg := &Config{}
 	cfg.AlicloudImageConfig.AlicloudImageName = "test-image"
 	cfg.AlicloudImageConfig.ImageEncrypted = config.TrileanFromBool(true)
 	cfg.AlicloudImageConfig.KMSKeyId = "same-region-kms-key"
 
-	req := step.buildCopyImageRequest(0, "cn-hangzhou", cfg, "m-source", 0, -1)
+	req := step.buildCopyImageRequest(0, "cn-hangzhou", cfg, "m-source", 1, -1)
 
 	if req.DestinationRegionId != "cn-hangzhou" {
 		t.Fatalf("expected destination region cn-hangzhou, got %s", req.DestinationRegionId)

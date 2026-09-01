@@ -25,6 +25,10 @@ type stepRegionCopyAlicloudImage struct {
 func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.StateBag) multistep.StepAction {
 	config := state.Get("config").(*Config)
 
+	// When the image is configured to be encrypted, we must include the source
+	// region itself in the destination list. CopyImage within the same region is
+	// the API operation that produces an encrypted copy of the original image,
+	// so skipping the source region would leave no encrypted image behind.
 	if config.ImageEncrypted != confighelper.TriUnset {
 		s.AlicloudImageDestinationRegions = append(s.AlicloudImageDestinationRegions, s.RegionId)
 		s.AlicloudImageDestinationNames = append(s.AlicloudImageDestinationNames, config.AlicloudImageName)
@@ -44,6 +48,11 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 	ui.Say(fmt.Sprintf("Coping image %s from %s...", srcImageId, s.RegionId))
 	crossRegionIndex := -1
 	for index, destinationRegion := range s.AlicloudImageDestinationRegions {
+		// Normally there is no reason to copy an image to the same region it
+		// already lives in. However, when image encryption is enabled, CopyImage
+		// must still be invoked for the source region so that an encrypted copy
+		// of the image is created. Do not simplify this to a plain same-region
+		// skip without considering the encryption use case.
 		if destinationRegion == s.RegionId && !config.ImageEncrypted.True() {
 			continue
 		}
@@ -73,7 +82,11 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 }
 
 func (s *stepRegionCopyAlicloudImage) buildCopyImageRequest(index int, destinationRegion string, config *Config, srcImageId string, numberOfName int, crossRegionIndex int) *ecs.CopyImageRequest {
-	ecsImageName := config.AlicloudImageName
+	// Leave the destination image name empty by default so that ECS auto-generates
+	// a unique name. Reusing config.AlicloudImageName here would force every
+	// destination region to share the same name, causing conflicts on re-runs
+	// unless image_force_delete is enabled.
+	ecsImageName := ""
 	if numberOfName > 0 && index < numberOfName {
 		ecsImageName = s.AlicloudImageDestinationNames[index]
 	}
