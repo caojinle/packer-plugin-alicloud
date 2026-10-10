@@ -28,10 +28,13 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 	// When the image is configured to be encrypted, we must include the source
 	// region itself in the destination list. CopyImage within the same region is
 	// the API operation that produces an encrypted copy of the original image,
-	// so skipping the source region would leave no encrypted image behind.
+	// so skipping the source region would leave no encrypted image behind. The
+	// name of that encrypted copy is resolved from config.AlicloudImageName in
+	// buildCopyImageRequest, so it must NOT be appended to the destination names
+	// here: appending it would shift the names and misalign them with the
+	// regions whenever image_copy_names is shorter than image_copy_regions.
 	if config.ImageEncrypted != confighelper.TriUnset {
 		s.AlicloudImageDestinationRegions = append(s.AlicloudImageDestinationRegions, s.RegionId)
-		s.AlicloudImageDestinationNames = append(s.AlicloudImageDestinationNames, config.AlicloudImageName)
 	}
 
 	if len(s.AlicloudImageDestinationRegions) == 0 {
@@ -43,11 +46,21 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 
 	srcImageId := state.Get("alicloudimage").(string)
 	alicloudImages := state.Get("alicloudimages").(map[string]string)
-	numberOfName := len(s.AlicloudImageDestinationNames)
+
+	// CopyImage requires the source image to be Available (100% progress).
+	// With enable_image_instance_access the previous step may have returned
+	// while the image is only Usable, so wait for the source image to become
+	// Available before copying it.
+	if config.EnableImageInstanceAccess {
+		ui.Message(fmt.Sprintf("Waiting for source image %s in %s to become available before copying...", srcImageId, s.RegionId))
+		if _, err := client.WaitForImageStatus(s.RegionId, srcImageId, ImageStatusAvailable, time.Duration(s.WaitCopyingImageReadyTimeout)*time.Second); err != nil {
+			return halt(state, err, fmt.Sprintf("Timeout waiting source image %s to become available before copying", srcImageId))
+		}
+	}
 
 	ui.Say(fmt.Sprintf("Coping image %s from %s...", srcImageId, s.RegionId))
 	crossRegionIndex := -1
-	for index, destinationRegion := range s.AlicloudImageDestinationRegions {
+	for _, destinationRegion := range s.AlicloudImageDestinationRegions {
 		// Normally there is no reason to copy an image to the same region it
 		// already lives in. However, when image encryption is enabled, CopyImage
 		// must still be invoked for the source region so that an encrypted copy
@@ -60,8 +73,7 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 		if destinationRegion != s.RegionId {
 			crossRegionIndex++
 		}
-
-		copyImageRequest := s.buildCopyImageRequest(index, destinationRegion, config, srcImageId, numberOfName, crossRegionIndex)
+		copyImageRequest := s.buildCopyImageRequest(destinationRegion, config, srcImageId, crossRegionIndex)
 
 		imageResponse, err := client.CopyImage(copyImageRequest)
 		if err != nil {
@@ -78,17 +90,37 @@ func (s *stepRegionCopyAlicloudImage) Run(ctx context.Context, state multistep.S
 		}
 	}
 
+	for copiedRegionId, copiedImageId := range alicloudImages {
+		if copiedImageId == srcImageId || copiedRegionId == s.RegionId {
+			continue
+		}
+		ui.Message(fmt.Sprintf("Waiting for copied image %s in %s to become available...", copiedImageId, copiedRegionId))
+		if _, err := client.WaitForImageStatus(copiedRegionId, copiedImageId, ImageStatusAvailable, time.Duration(s.WaitCopyingImageReadyTimeout)*time.Second); err != nil {
+			return halt(state, err, fmt.Sprintf("Timeout waiting copied image %s in %s to become available", copiedImageId, copiedRegionId))
+		}
+	}
+
 	return multistep.ActionContinue
 }
 
-func (s *stepRegionCopyAlicloudImage) buildCopyImageRequest(index int, destinationRegion string, config *Config, srcImageId string, numberOfName int, crossRegionIndex int) *ecs.CopyImageRequest {
+func (s *stepRegionCopyAlicloudImage) buildCopyImageRequest(destinationRegion string, config *Config, srcImageId string, crossRegionIndex int) *ecs.CopyImageRequest {
 	// Leave the destination image name empty by default so that ECS auto-generates
-	// a unique name. Reusing config.AlicloudImageName here would force every
-	// destination region to share the same name, causing conflicts on re-runs
+	// a unique name. Cross-region copies are named by their position among the
+	// cross-region destinations, so a partial image_copy_names list leaves the
+	// remaining regions unnamed instead of shifting the names onto the wrong
+	// regions. Reusing config.AlicloudImageName for every destination region
+	// would force them to share the same name, causing conflicts on re-runs
 	// unless image_force_delete is enabled.
 	ecsImageName := ""
-	if numberOfName > 0 && index < numberOfName {
-		ecsImageName = s.AlicloudImageDestinationNames[index]
+	if destinationRegion == s.RegionId {
+		// A same-region copy only happens when encryption is enabled, and it is
+		// the encrypted replacement of the temporary source image, so it takes
+		// over the configured image name.
+		if config.ImageEncrypted.True() {
+			ecsImageName = config.AlicloudImageName
+		}
+	} else if crossRegionIndex >= 0 && crossRegionIndex < len(s.AlicloudImageDestinationNames) {
+		ecsImageName = s.AlicloudImageDestinationNames[crossRegionIndex]
 	}
 
 	copyImageRequest := ecs.CreateCopyImageRequest()
