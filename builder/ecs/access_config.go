@@ -14,8 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alibabacloud-go/darabonba-openapi/v2/utils"
+	ecs20140526Client "github.com/alibabacloud-go/ecs-20140526/v7/client"
+	"github.com/alibabacloud-go/tea/tea"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/endpoints"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	"github.com/aliyun/credentials-go/credentials"
 	"github.com/hashicorp/packer-plugin-alicloud/version"
 	"github.com/hashicorp/packer-plugin-sdk/template/interpolate"
 	"github.com/mitchellh/go-homedir"
@@ -126,9 +130,62 @@ func (c *AlicloudAccessConfig) Client() (*ClientWrapper, error) {
 	if c.Protocol != "" && isHTTPOrHTTPS(c.Protocol) {
 		client.GetConfig().WithScheme(strings.ToUpper(c.Protocol))
 	}
-	c.client = &ClientWrapper{client}
+
+	v7Client, err := c.newV7Client()
+	if err != nil {
+		return nil, err
+	}
+
+	c.client = &ClientWrapper{client, v7Client}
 
 	return c.client, nil
+}
+
+func (c *AlicloudAccessConfig) newV7Client() (*ecs20140526Client.Client, error) {
+	config := &utils.Config{
+		RegionId:    tea.String(c.AlicloudRegion),
+		Protocol:    tea.String("https"),
+		ReadTimeout: tea.Int(int(DefaultRequestReadTimeout.Milliseconds())),
+		UserAgent:   tea.String(fmt.Sprintf("%s/%s", Packer, version.PluginVersion.FormattedVersion())),
+	}
+
+	if c.Protocol != "" && isHTTPOrHTTPS(c.Protocol) {
+		config.Protocol = tea.String(strings.ToLower(c.Protocol))
+	}
+
+	if c.CustomEndpointEcs != "" {
+		config.Endpoint = tea.String(c.CustomEndpointEcs)
+	}
+
+	credentialConfig := &credentials.Config{}
+	switch {
+	case c.AlicloudRamRole != "":
+		credentialConfig.Type = tea.String("ecs_ram_role")
+		credentialConfig.RoleName = tea.String(c.AlicloudRamRole)
+	case c.AlicloudRamRoleArn != "" && c.AlicloudRamSessionName != "":
+		credentialConfig.Type = tea.String("ram_role_arn")
+		credentialConfig.AccessKeyId = tea.String(c.AlicloudAccessKey)
+		credentialConfig.AccessKeySecret = tea.String(c.AlicloudSecretKey)
+		credentialConfig.RoleArn = tea.String(c.AlicloudRamRoleArn)
+		credentialConfig.RoleSessionName = tea.String(c.AlicloudRamSessionName)
+	case c.SecurityToken != "":
+		credentialConfig.Type = tea.String("sts")
+		credentialConfig.AccessKeyId = tea.String(c.AlicloudAccessKey)
+		credentialConfig.AccessKeySecret = tea.String(c.AlicloudSecretKey)
+		credentialConfig.SecurityToken = tea.String(c.SecurityToken)
+	default:
+		credentialConfig.Type = tea.String("access_key")
+		credentialConfig.AccessKeyId = tea.String(c.AlicloudAccessKey)
+		credentialConfig.AccessKeySecret = tea.String(c.AlicloudSecretKey)
+	}
+
+	cred, err := credentials.NewCredential(credentialConfig)
+	if err != nil {
+		return nil, err
+	}
+	config.Credential = cred
+
+	return ecs20140526Client.NewClient(config)
 }
 
 func (c *AlicloudAccessConfig) Prepare(ctx *interpolate.Context) []error {

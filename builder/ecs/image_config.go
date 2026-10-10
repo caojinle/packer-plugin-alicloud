@@ -187,6 +187,15 @@ type AlicloudImageConfig struct {
 	AlicloudBootMode string `mapstructure:"boot_mode" required:"false"`
 	// If set to true, the ECS keypair information will be removed. The default value is false.
 	AlicloudImageDeleteSSHPrivateKey bool `mapstructure:"image_delete_ssh_private_key" required:"false"`
+	// If set to true, Packer enables instant availability for the image: the
+	// build ends as soon as the image becomes "usable" instead of waiting for
+	// the fully Available state. This is intended to finish the build faster,
+	// but is not guaranteed to always be faster. While usable, the image can
+	// already be used to launch instances and be shared with other accounts,
+	// even though its creation progress may not yet be 100%. Limitation: the
+	// system disk and all data disks of the image must be explicitly
+	// configured as ESSD series disks. The default value is false.
+	EnableImageInstanceAccess bool `mapstructure:"enable_image_instance_access" required:"false"`
 }
 
 func (c *AlicloudImageConfig) Prepare(ctx *interpolate.Context) []error {
@@ -260,5 +269,20 @@ func (c *AlicloudImageConfig) Prepare(ctx *interpolate.Context) []error {
 		errs = append(errs, fmt.Errorf("image_encrypted must be true when kms_key_id is specified"))
 	}
 
+	if c.EnableImageInstanceAccess {
+		if !isESSDDiskCategory(c.ECSSystemDiskMapping.DiskCategory) {
+			errs = append(errs, fmt.Errorf("enable_image_instance_access requires system_disk_mapping.disk_category to be an ESSD disk category (got %q)", c.ECSSystemDiskMapping.DiskCategory))
+		}
+		for i, disk := range c.ECSImagesDiskMappings {
+			if !isESSDDiskCategory(disk.DiskCategory) {
+				errs = append(errs, fmt.Errorf("enable_image_instance_access requires image_disk_mappings[%d].disk_category to be an ESSD disk category (got %q)", i, disk.DiskCategory))
+			}
+		}
+	}
+
 	return errs
+}
+
+func isESSDDiskCategory(category string) bool {
+	return strings.Contains(strings.ToLower(category), "essd")
 }

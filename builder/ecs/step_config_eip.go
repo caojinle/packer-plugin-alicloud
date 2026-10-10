@@ -143,21 +143,27 @@ func (s *stepConfigAlicloudEIP) Cleanup(state multistep.StateBag) {
 		return
 	}
 
-	cleanUpMessage(state, "EIP association")
-
 	client := state.Get("client").(*ClientWrapper)
 	instance := state.Get("instance").(*ecs.Instance)
 	ui := state.Get("ui").(packersdk.Ui)
 
-	unassociateEipAddressRequest := ecs.CreateUnassociateEipAddressRequest()
-	unassociateEipAddressRequest.AllocationId = s.allocatedId
-	unassociateEipAddressRequest.InstanceId = instance.InstanceId
-	if _, err := client.UnassociateEipAddress(unassociateEipAddressRequest); err != nil {
-		ui.Say(fmt.Sprintf("Failed to unassociate EIP: %s", err))
-	}
+	// If the source instance was already deleted after CreateImage
+	// succeeded, the EIP has been unassociated automatically by the
+	// platform, so skip the unassociate call. The EIP allocated by Packer
+	// is still released below, keep allocatedId intact.
+	if _, deleted := state.GetOk("instance_deleted_early"); !deleted {
+		cleanUpMessage(state, "EIP association")
 
-	if err := s.waitForEipStatus(client, instance.RegionId, s.allocatedId, EipStatusAvailable); err != nil {
-		ui.Say(fmt.Sprintf("Timeout while unassociating EIP: %s", err))
+		unassociateEipAddressRequest := ecs.CreateUnassociateEipAddressRequest()
+		unassociateEipAddressRequest.AllocationId = s.allocatedId
+		unassociateEipAddressRequest.InstanceId = instance.InstanceId
+		if _, err := client.UnassociateEipAddress(unassociateEipAddressRequest); err != nil {
+			ui.Say(fmt.Sprintf("Failed to unassociate EIP: %s", err))
+		}
+
+		if err := s.waitForEipStatus(client, instance.RegionId, s.allocatedId, EipStatusAvailable); err != nil {
+			ui.Say(fmt.Sprintf("Timeout while unassociating EIP: %s", err))
+		}
 	}
 
 	if len(s.EIPId) > 0 {
